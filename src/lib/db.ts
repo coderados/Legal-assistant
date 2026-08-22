@@ -2,18 +2,33 @@ import Database from "better-sqlite3"
 import { mkdirSync } from "fs"
 import path from "path"
 
-const dbUrl = process.env.DATABASE_URL ?? "./data/legal.db"
-const dbPath = path.isAbsolute(dbUrl)
-  ? dbUrl
-  : path.join(process.cwd(), "data", /*turbopackIgnore: true*/ path.basename(dbUrl))
+let db: Database.Database | null = null
 
-mkdirSync(path.dirname(dbPath), { recursive: true })
+/**
+ * Lazily create/open the SQLite database on first use.
+ *
+ * Route modules are imported during `next build` (page-data collection), so
+ * the filesystem must not be touched at module load time — on platforms like
+ * Render the persistent disk (/var/data) is only mounted at runtime.
+ */
+export function getDb(): Database.Database {
+  if (db) return db
 
-export const db = new Database(dbPath)
-db.pragma("journal_mode = WAL")
+  const dbUrl = process.env.DATABASE_URL ?? "./data/legal.db"
+  const dbPath = path.isAbsolute(dbUrl)
+    ? dbUrl
+    : path.join(process.cwd(), "data", /*turbopackIgnore: true*/ path.basename(dbUrl))
 
-export function initDb() {
-  db.exec(`
+  mkdirSync(path.dirname(dbPath), { recursive: true })
+
+  db = new Database(dbPath)
+  db.pragma("journal_mode = WAL")
+  initDb(db)
+  return db
+}
+
+function initDb(database: Database.Database) {
+  database.exec(`
     CREATE TABLE IF NOT EXISTS documents (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -34,5 +49,3 @@ export function initDb() {
     CREATE INDEX IF NOT EXISTS idx_chunks_document ON chunks(document_id);
   `)
 }
-
-initDb()

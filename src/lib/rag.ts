@@ -1,4 +1,4 @@
-import { db } from "./db"
+import { getDb } from "./db"
 import { createEmbedding } from "./ai"
 
 export interface Chunk {
@@ -38,6 +38,7 @@ export async function embedAndStore(
   documentId: string,
   chunks: { content: string; metadata?: Record<string, unknown> }[]
 ) {
+  const db = getDb()
   const stmt = db.prepare(
     `INSERT INTO chunks (id, document_id, content, embedding, metadata, created_at)
      VALUES (?, ?, ?, ?, ?, ?)`
@@ -79,7 +80,9 @@ export function cosineSimilarity(a: number[], b: number[]) {
 
 export async function retrieveRelevantChunks(query: string, topK = 5): Promise<Chunk[]> {
   const topKValue = Number(process.env.RAG_TOP_K ?? topK)
-  const all = db.prepare("SELECT id, document_id, content, embedding, metadata FROM chunks").all() as {
+  const all = getDb()
+    .prepare("SELECT id, document_id, content, embedding, metadata FROM chunks")
+    .all() as {
     id: string
     document_id: string
     content: string
@@ -113,7 +116,7 @@ export async function retrieveRelevantChunks(query: string, topK = 5): Promise<C
 }
 
 export function listDocuments() {
-  return db
+  return getDb()
     .prepare(
       `SELECT d.id, d.name, d.description, d.source_type, d.created_at,
               COUNT(c.id) AS chunk_count
@@ -133,5 +136,5 @@ export function listDocuments() {
 }
 
 export function deleteDocument(id: string) {
-  db.prepare("DELETE FROM documents WHERE id = ?").run(id)
+  getDb().prepare("DELETE FROM documents WHERE id = ?").run(id)
 }

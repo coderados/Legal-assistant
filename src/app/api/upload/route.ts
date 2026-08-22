@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { v4 as uuid } from "uuid"
-import { db } from "@/lib/db"
+import { getDb } from "@/lib/db"
 import { extractText } from "@/lib/documents"
 import { chunkText, embedAndStore } from "@/lib/rag"
 
@@ -22,9 +22,11 @@ export async function POST(request: NextRequest) {
     const documentId = uuid()
     const now = Date.now()
 
-    db.prepare(
-      `INSERT INTO documents (id, name, description, source_type, created_at) VALUES (?, ?, ?, ?, ?)`
-    ).run(documentId, file.name, description, type, now)
+    getDb()
+      .prepare(
+        `INSERT INTO documents (id, name, description, source_type, created_at) VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(documentId, file.name, description, type, now)
 
     const chunks = chunkText(text).map((content, index) => ({
       content,
