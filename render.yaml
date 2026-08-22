@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: legal-assistant
+    runtime: node
+    plan: starter
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: AGNES_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: AGNES_MODEL
+        value: agnes-2.5-flash
+      - key: OPENAI_EMBEDDING_MODEL
+        value: text-embedding-3-small
+      - key: DATABASE_URL
+        value: /var/data/legal.db
+      - key: RAG_TOP_K
+        value: "5"
+    disk:
+      name: legal-data
+      mountPath: /var/data
+      sizeGB: 1
