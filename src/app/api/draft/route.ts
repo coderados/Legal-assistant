@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getAgnesClient, AGNES_MODEL } from "@/lib/ai"
+import { createAgnesThinkingCompletion } from "@/lib/ai"
 import { retrieveRelevantChunks } from "@/lib/rag"
 
 const DRAFT_SYSTEM_PROMPT = `You are a careful legal drafting assistant focused on United States federal law and California state law.
@@ -43,16 +43,13 @@ export async function POST(request: NextRequest) {
 
     const system = `${DRAFT_SYSTEM_PROMPT}\n\n## Requested template\n${TEMPLATES[template]}\n\n## Retrieved legal sources\n${context || "No uploaded legal sources are available yet."}`
 
-    const completion = await getAgnesClient().chat.completions.create({
-      model: AGNES_MODEL,
-      messages: [
+    const draft = await createAgnesThinkingCompletion(
+      [
         { role: "system", content: system },
         { role: "user", content: facts },
       ],
-      temperature: 0.3,
-    })
-
-    const draft = completion.choices[0]?.message?.content ?? ""
+      { temperature: 0.3, maxTokens: 4096 },
+    )
 
     return NextResponse.json({
       draft,

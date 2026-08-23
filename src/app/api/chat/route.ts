@@ -23,7 +23,14 @@ export async function POST(request: NextRequest) {
       return new Response(JSON.stringify({ error: "No user message found" }), { status: 400 })
     }
 
-    const chunks = await retrieveRelevantChunks(lastUserMessage.content)
+    // Retrieval is best-effort: a missing OPENAI_API_KEY, an empty database,
+    // or a native sqlite failure should not prevent the LLM from answering.
+    let chunks: Awaited<ReturnType<typeof retrieveRelevantChunks>> = []
+    try {
+      chunks = await retrieveRelevantChunks(lastUserMessage.content)
+    } catch (retrievalError) {
+      console.error("RAG retrieval failed (continuing without sources):", retrievalError)
+    }
     const context = chunks
       .map((c, i) => `[Source ${i + 1}${c.metadata?.source ? ` - ${c.metadata.source}` : ""}]\n${c.content}`)
       .join("\n\n---\n\n")

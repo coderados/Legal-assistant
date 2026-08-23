@@ -6,17 +6,22 @@ interface SpeechRecognitionEvent {
   results: SpeechRecognitionResultList;
 }
 
+interface SpeechRecognitionHandle {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onstart: (() => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
+  onresult: ((event: SpeechRecognitionEvent) => void) | null;
+  start(): void;
+  stop(): void;
+  abort(): void;
+}
+
 declare global {
   interface Window {
-    SpeechRecognition?: new () => {
-      continuous: boolean;
-      interimResults: boolean;
-      lang: string;
-      onstart: (() => void) | null;
-      onend: (() => void) | null;
-      onresult: ((event: SpeechRecognitionEvent) => void) | null;
-      start(): void;
-    };
+    SpeechRecognition?: new () => SpeechRecognitionHandle;
     webkitSpeechRecognition?: Window["SpeechRecognition"];
   }
 }
@@ -46,11 +51,32 @@ export default function ChatPage() {
   const [activeSources, setActiveSources] = useState<Source[] | null>(null);
   const [listening, setListening] = useState(false);
   const [speakingIndex, setSpeakingIndex] = useState<number | null>(null);
+  const [conversationMode, setConversationMode] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Refs that hold the live truth for the voice loop (state is async).
+  const messagesRef = useRef<Message[]>(messages);
+  const conversationRef = useRef(false);
+  const recognitionRef = useRef<SpeechRecognitionHandle | null>(null);
+  const loopActiveRef = useRef(false);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
+
+  // Stop everything (mic + speech) when leaving the page.
+  useEffect(() => {
+    return () => {
+      loopActiveRef.current = false;
+      conversationRef.current = false;
+      recognitionRef.current?.abort();
+      if (typeof window !== "undefined") window.speechSynthesis.cancel();
+    };
+  }, []);
 
   function speak(text: string, index: number) {
     if (typeof window === "undefined") return;
@@ -71,41 +97,16 @@ export default function ChatPage() {
     setSpeakingIndex(null);
   }
 
-  function startListening() {
-    if (typeof window === "undefined") return;
-    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!Recognition) {
-      alert("Voice input is not supported in this browser.");
-      return;
-    }
-    const recognition = new Recognition();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = "en-US";
-    recognition.onstart = () => setListening(true);
-    recognition.onend = () => setListening(false);
-    recognition.onresult = (event) => {
-      const transcript = event.results[0][0].transcript;
-      setInput((prev) => (prev ? prev + " " + transcript : transcript));
-    };
-    recognition.start();
-  }
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!input.trim() || loading) return;
-
-    const userMessage: Message = { role: "user", content: input.trim() };
-    setMessages((prev) => [...prev, userMessage]);
-    setInput("");
+  // Core send: takes an explicit message list (from the ref, so the voice loop
+  // never reads stale state), streams the reply, and returns the full text.
+  async function sendMessages(conversation: Message[]): Promise<string> {
     setLoading(true);
     setActiveSources(null);
 
-    const updatedMessages = [...messages, userMessage];
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: updatedMessages }),
+      body: JSON.stringify({ messages: conversation }),
     });
 
     if (!response.ok || !response.body) {
@@ -114,7 +115,7 @@ export default function ChatPage() {
         { role: "assistant", content: "Sorry, something went wrong. Please try again." },
       ]);
       setLoading(false);
-      return;
+      return "";
     }
 
     const reader = response.body.getReader();
@@ -156,6 +157,126 @@ export default function ChatPage() {
     }
 
     setLoading(false);
+    return assistantContent;
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!input.trim() || loading) return;
+
+    const userMessage: Message = { role: "user", content: input.trim() };
+    const updatedMessages = [...messagesRef.current, userMessage];
+    setMessages(updatedMessages);
+    setInput("");
+
+    await sendMessages(updatedMessages);
+  }
+
+  // ---- Conversation mode (hands-free voice loop) ----
+
+  // Speak the reply, resolve when done so the loop can listen again.
+  function speakAndWait(text: string): Promise<void> {
+    return new Promise((resolve) => {
+      if (typeof window === "undefined") return resolve();
+      const synth = window.speechSynthesis;
+      synth.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1;
+      utterance.pitch = 1;
+      utterance.onend = () => resolve();
+      utterance.onerror = () => resolve();
+      synth.speak(utterance);
+    });
+  }
+
+  // One round: listen → transcript → send → speak reply → resolve.
+  function runConversationTurn(): Promise<void> {
+    return new Promise((resolve) => {
+      if (typeof window === "undefined") return resolve();
+      const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!Recognition) {
+        alert("Voice input is not supported in this browser.");
+        resolve();
+        return;
+      }
+
+      const recognition = new Recognition();
+      recognitionRef.current = recognition;
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = "en-US";
+
+      let gotResult = false;
+
+      recognition.onstart = () => setListening(true);
+      recognition.onerror = () => setListening(false);
+      recognition.onend = () => {
+        setListening(false);
+        // If no speech was captured, resolve so the loop can decide to retry/stop.
+        if (!gotResult) resolve();
+      };
+      recognition.onresult = async (event) => {
+        gotResult = true;
+        const transcript = event.results[0][0].transcript.trim();
+        if (!transcript) {
+          resolve();
+          return;
+        }
+
+        const userMessage: Message = { role: "user", content: transcript };
+        const updatedMessages = [...messagesRef.current, userMessage];
+        setMessages(updatedMessages);
+
+        const reply = await sendMessages(updatedMessages);
+        if (reply && conversationRef.current && loopActiveRef.current) {
+          await speakAndWait(reply);
+        }
+        resolve();
+      };
+
+      try {
+        recognition.start();
+      } catch {
+        resolve();
+      }
+    });
+  }
+
+  async function conversationLoop() {
+    while (conversationRef.current && loopActiveRef.current) {
+      // Avoid overlapping turns.
+      // eslint-disable-next-line no-await-in-loop
+      await runConversationTurn();
+    }
+  }
+
+  function startConversation() {
+    if (typeof window === "undefined") return;
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      alert("Voice input is not supported in this browser.");
+      return;
+    }
+    window.speechSynthesis.cancel();
+    setConversationMode(true);
+    conversationRef.current = true;
+    loopActiveRef.current = true;
+    void conversationLoop();
+  }
+
+  function stopConversation() {
+    conversationRef.current = false;
+    loopActiveRef.current = false;
+    setConversationMode(false);
+    setListening(false);
+    recognitionRef.current?.abort();
+    if (typeof window === "undefined") return;
+    window.speechSynthesis.cancel();
+  }
+
+  function toggleConversation() {
+    if (conversationMode) stopConversation();
+    else startConversation();
   }
 
   return (
@@ -214,24 +335,45 @@ export default function ChatPage() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask a legal question…"
-            className="flex-1 rounded-lg border border-zinc-300 px-4 py-3 text-sm outline-none focus:border-zinc-500"
+            disabled={conversationMode}
+            className="flex-1 rounded-lg border border-zinc-300 px-4 py-3 text-sm outline-none focus:border-zinc-500 disabled:bg-zinc-50"
           />
           <button
             type="button"
-            onClick={startListening}
-            disabled={listening}
-            className="rounded-lg border border-zinc-300 px-4 py-3 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+            onClick={toggleConversation}
+            aria-pressed={conversationMode}
+            className={`flex items-center gap-2 rounded-lg px-4 py-3 text-sm font-medium ${
+              conversationMode
+                ? "bg-red-600 text-white hover:bg-red-700"
+                : "border border-zinc-300 text-zinc-700 hover:bg-zinc-50"
+            }`}
           >
-            {listening ? "Listening…" : "Voice"}
+            <span
+              className={`inline-block h-2 w-2 rounded-full ${
+                conversationMode ? (listening ? "animate-pulse bg-white" : "bg-white/60") : "bg-zinc-400"
+              }`}
+            />
+            {conversationMode ? "End conversation" : "Conversation"}
           </button>
           <button
             type="submit"
-            disabled={loading || !input.trim()}
+            disabled={loading || !input.trim() || conversationMode}
             className="rounded-lg bg-zinc-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
           >
             Send
           </button>
         </form>
+        {conversationMode && (
+          <p className="mt-2 flex items-center gap-2 text-xs text-zinc-500">
+            <span className={`inline-block h-2 w-2 rounded-full ${listening ? "animate-pulse bg-green-500" : "bg-zinc-300"}`} />
+            {listening
+              ? "Listening… speak now."
+              : loading
+                ? "Thinking…"
+                : "Speaking reply… (or starting next turn)"}
+            <span className="ml-1 text-zinc-400">Text still appears above. Click “End conversation” to stop.</span>
+          </p>
+        )}
       </div>
 
       {activeSources && (
