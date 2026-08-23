@@ -16,6 +16,7 @@ export default function DraftPage() {
   const [draft, setDraft] = useState("");
   const [sources, setSources] = useState<{ index: number; source: string; content: string }[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [speaking, setSpeaking] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -25,6 +26,7 @@ export default function DraftPage() {
     setLoading(true);
     setDraft("");
     setSources([]);
+    setError(null);
 
     try {
       const res = await fetch("/api/draft", {
@@ -38,13 +40,13 @@ export default function DraftPage() {
         error?: string;
       };
       if (!res.ok) {
-        alert(data.error ?? "Draft generation failed");
+        setError(data.error ?? "Draft generation failed");
       } else {
         setDraft(data.draft ?? "");
         setSources(data.sources ?? []);
       }
-    } catch (error) {
-      alert(error instanceof Error ? error.message : "Draft generation failed");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Draft generation failed");
     } finally {
       setLoading(false);
     }
@@ -111,6 +113,12 @@ export default function DraftPage() {
         >
           {loading ? "Drafting…" : "Generate draft"}
         </button>
+
+        {error && (
+          <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {error}
+          </p>
+        )}
       </form>
 
       {draft && (

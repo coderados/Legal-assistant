@@ -103,61 +103,89 @@ export default function ChatPage() {
     setLoading(true);
     setActiveSources(null);
 
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: conversation }),
-    });
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: conversation }),
+      });
 
-    if (!response.ok || !response.body) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: "Sorry, something went wrong. Please try again." },
-      ]);
-      setLoading(false);
-      return "";
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let assistantContent = "";
-    let sources: Source[] = [];
-
-    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split("\n").filter((line) => line.startsWith("data: "));
-      for (const line of lines) {
-        const data = line.slice(6);
-        if (data === "[DONE]") continue;
+      if (!response.ok) {
+        let message = "Sorry, something went wrong. Please try again.";
         try {
-          const parsed = JSON.parse(data) as {
-            content?: string;
-            sources?: Source[];
-          };
-          if (parsed.sources) {
-            sources = parsed.sources;
-            setActiveSources(parsed.sources);
-          }
-          if (parsed.content) {
-            assistantContent += parsed.content;
-            setMessages((prev) => {
-              const next = [...prev];
-              next[next.length - 1] = { role: "assistant", content: assistantContent, sources };
-              return next;
-            });
-          }
+          const err = (await response.json()) as { error?: string };
+          if (err.error) message = `⚠️ ${err.error}`;
         } catch {
-          // ignore malformed SSE lines
+          // Non-JSON error body; keep the generic message.
+        }
+        setMessages((prev) => [...prev, { role: "assistant", content: message }]);
+        return "";
+      }
+
+      if (!response.body) throw new Error("Empty response body from server");
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let assistantContent = "";
+      let streamError: string | null = null;
+      let sources: Source[] = [];
+
+      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split("\n").filter((line) => line.startsWith("data: "));
+        for (const line of lines) {
+          const data = line.slice(6);
+          if (data === "[DONE]") continue;
+          try {
+            const parsed = JSON.parse(data) as {
+              content?: string;
+              sources?: Source[];
+              error?: string;
+            };
+            if (parsed.error) streamError = parsed.error;
+            if (parsed.sources) {
+              sources = parsed.sources;
+              setActiveSources(parsed.sources);
+            }
+            if (parsed.content) {
+              assistantContent += parsed.content;
+              setMessages((prev) => {
+                const next = [...prev];
+                next[next.length - 1] = { role: "assistant", content: assistantContent, sources };
+                return next;
+              });
+            }
+          } catch {
+            // ignore malformed SSE lines
+          }
         }
       }
-    }
 
-    setLoading(false);
-    return assistantContent;
+      const finalContent = streamError
+        ? assistantContent
+          ? `${assistantContent}\n\n⚠️ ${streamError}`
+          : `⚠️ ${streamError}`
+        : assistantContent;
+      setMessages((prev) => {
+        const next = [...prev];
+        next[next.length - 1] = { role: "assistant", content: finalContent, sources };
+        return next;
+      });
+      return finalContent;
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? `⚠️ ${error.message}`
+          : "Sorry, something went wrong. Please try again.";
+      setMessages((prev) => [...prev, { role: "assistant", content: message }]);
+      return "";
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -245,7 +273,6 @@ export default function ChatPage() {
   async function conversationLoop() {
     while (conversationRef.current && loopActiveRef.current) {
       // Avoid overlapping turns.
-      // eslint-disable-next-line no-await-in-loop
       await runConversationTurn();
     }
   }

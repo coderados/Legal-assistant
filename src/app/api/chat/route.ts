@@ -1,5 +1,12 @@
 import { NextRequest } from "next/server"
-import { getAgnesClient, AGNES_MODEL } from "@/lib/ai"
+import OpenAI from "openai"
+import {
+  getAgnesClient,
+  getOpenAIClient,
+  AGNES_MODEL,
+  AGNES_FALLBACK_MODEL,
+  OPENAI_CHAT_MODEL,
+} from "@/lib/ai"
 import { retrieveRelevantChunks } from "@/lib/rag"
 
 const LEGAL_SYSTEM_PROMPT = `You are a careful legal research assistant focused on United States federal law and California state law.
@@ -36,37 +43,106 @@ export async function POST(request: NextRequest) {
       .join("\n\n---\n\n")
 
     const augmentedSystem = `${LEGAL_SYSTEM_PROMPT}\n\n## Retrieved legal sources\n${context || "No uploaded legal sources are available yet."}`
+    const fullMessages = [{ role: "system" as const, content: augmentedSystem }, ...messages]
 
-    const stream = await getAgnesClient().chat.completions.create({
-      model: AGNES_MODEL,
-      messages: [{ role: "system", content: augmentedSystem }, ...messages],
-      stream: true,
-      temperature: 0.3,
-    })
+    type CompletionStream = AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>
+
+    // Try Agnes first, then its previous-generation model, then OpenAI's
+    // standard chat API. Each attempt is only replaced if it fails *before*
+    // streaming begins (auth/model errors surface at create() time).
+    const attempts: { label: string; create: () => Promise<CompletionStream> }[] = [
+      {
+        label: `agnes (${AGNES_MODEL})`,
+        create: () =>
+          getAgnesClient().chat.completions.create({
+            model: AGNES_MODEL,
+            messages: fullMessages,
+            stream: true,
+            temperature: 0.3,
+          }),
+      },
+      {
+        label: `agnes (${AGNES_FALLBACK_MODEL})`,
+        create: () =>
+          getAgnesClient().chat.completions.create({
+            model: AGNES_FALLBACK_MODEL,
+            messages: fullMessages,
+            stream: true,
+            temperature: 0.3,
+          }),
+      },
+      {
+        label: `openai (${OPENAI_CHAT_MODEL})`,
+        create: () =>
+          getOpenAIClient().chat.completions.create({
+            model: OPENAI_CHAT_MODEL,
+            messages: fullMessages,
+            stream: true,
+            temperature: 0.3,
+          }),
+      },
+    ]
+
+    let stream: CompletionStream | null = null
+    let lastError: unknown
+    for (const attempt of attempts) {
+      try {
+        stream = await attempt.create()
+        break
+      } catch (err) {
+        lastError = err
+        console.warn(`[chat] ${attempt.label} failed, trying fallback:`, err)
+      }
+    }
+
+    if (!stream) {
+      const reason = lastError instanceof Error ? lastError.message : String(lastError)
+      return new Response(
+        JSON.stringify({ error: `All model providers failed: ${reason}` }),
+        { status: 502, headers: { "Content-Type": "application/json" } }
+      )
+    }
 
     const encoder = new TextEncoder()
     const readable = new ReadableStream({
       async start(controller) {
-        controller.enqueue(
-          encoder.encode(
-            `data: ${JSON.stringify({
-              sources: chunks.map((c, i) => ({
-                index: i + 1,
-                source: typeof c.metadata?.source === "string" ? c.metadata.source : "Uploaded source",
-                content: c.content.slice(0, 500),
-              })),
-            })}\n\n`
+        try {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({
+                sources: chunks.map((c, i) => ({
+                  index: i + 1,
+                  source: typeof c.metadata?.source === "string" ? c.metadata.source : "Uploaded source",
+                  content: c.content.slice(0, 500),
+                })),
+              })}\n\n`
+            )
           )
-        )
 
-        for await (const chunk of stream) {
-          const content = chunk.choices[0]?.delta?.content
-          if (content) {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content })}\n\n`))
+          for await (const chunk of stream) {
+            const content = chunk.choices[0]?.delta?.content
+            if (content) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content })}\n\n`))
+            }
+          }
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"))
+        } catch (streamError) {
+          console.error("Chat stream error:", streamError)
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({
+                error: streamError instanceof Error ? streamError.message : "Stream interrupted",
+              })}\n\n`
+            )
+          )
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"))
+        } finally {
+          try {
+            controller.close()
+          } catch {
+            // Stream already errored/closed; nothing to do.
           }
         }
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"))
-        controller.close()
       },
     })
 

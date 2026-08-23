@@ -36,7 +36,14 @@ export async function POST(request: NextRequest) {
     }
 
     const query = `${TEMPLATES[template]}\n\nUser facts:\n${facts}`
-    const chunks = await retrieveRelevantChunks(query)
+    // Retrieval is best-effort: a missing OPENAI_API_KEY or a native sqlite
+    // failure should not prevent the draft from being generated.
+    let chunks: Awaited<ReturnType<typeof retrieveRelevantChunks>> = []
+    try {
+      chunks = await retrieveRelevantChunks(query)
+    } catch (retrievalError) {
+      console.error("RAG retrieval failed (drafting without sources):", retrievalError)
+    }
     const context = chunks
       .map((c, i) => `[Source ${i + 1}${c.metadata?.source ? ` - ${c.metadata.source}` : ""}]\n${c.content}`)
       .join("\n\n---\n\n")

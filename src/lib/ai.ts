@@ -5,11 +5,13 @@ let openaiClient: OpenAI | null = null
 
 // Lazy constructors: route modules are imported during `next build`, so
 // avoid constructing clients (which require API keys) at module load time.
+export const AGNES_BASE_URL = process.env.AGNES_BASE_URL ?? "https://apihub.agnes-ai.com/v1"
+
 export function getAgnesClient(): OpenAI {
   if (!agnesClient) {
     agnesClient = new OpenAI({
       apiKey: process.env.AGNES_API_KEY,
-      baseURL: "https://apihub.agnes-ai.com/v1",
+      baseURL: AGNES_BASE_URL,
     })
   }
   return agnesClient
@@ -26,6 +28,7 @@ export function getOpenAIClient(): OpenAI {
 
 export const AGNES_MODEL = process.env.AGNES_MODEL ?? "agnes-2.5-flash"
 export const AGNES_FALLBACK_MODEL = process.env.AGNES_FALLBACK_MODEL ?? "agnes-2.0-flash"
+export const OPENAI_CHAT_MODEL = process.env.OPENAI_CHAT_MODEL ?? "gpt-4o-mini"
 export const EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL ?? "text-embedding-3-small"
 
 // Agnes 2.5 "Thinking" mode is enabled via the OpenAI-compatible extension
@@ -80,7 +83,35 @@ export async function createAgnesThinkingCompletion(
       console.warn(`[ai] Agnes attempt failed (model=${String(params.model)}), trying fallback:`, err)
     }
   }
-  throw lastError instanceof Error ? lastError : new Error("Agnes completion failed")
+
+  // Last resort: fall back to OpenAI's standard chat API so the app keeps
+  // working even if the Agnes gateway/key/model is unavailable.
+  try {
+    console.warn("[ai] All Agnes attempts failed, falling back to OpenAI chat")
+    return await createOpenAICompletion(messages, options)
+  } catch (openAIError) {
+    console.error("[ai] OpenAI fallback also failed:", openAIError)
+  }
+
+  const reason = lastError instanceof Error ? lastError.message : String(lastError)
+  throw new Error(`All model providers failed (Agnes + OpenAI). Last error: ${reason}`)
+}
+
+export async function createOpenAICompletion(
+  messages: ChatMessage[],
+  options: ThinkingCompletionOptions = {},
+): Promise<string> {
+  const client = getOpenAIClient()
+  const { temperature = 0.3, maxTokens = 2048 } = options
+  const completion = await client.chat.completions.create({
+    model: OPENAI_CHAT_MODEL,
+    messages,
+    temperature,
+    max_tokens: maxTokens,
+  } as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming)
+  const content = completion.choices?.[0]?.message?.content
+  if (typeof content === "string" && content.trim()) return content
+  throw new Error("OpenAI completion returned empty content")
 }
 
 export async function createEmbedding(text: string) {
