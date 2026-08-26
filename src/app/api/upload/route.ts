@@ -5,6 +5,7 @@ import { extractText } from "@/lib/documents"
 import { chunkText, embedAndStore } from "@/lib/rag"
 
 export async function POST(request: NextRequest) {
+  let documentId: string | null = null
   try {
     const formData = await request.formData()
     const file = formData.get("file") as File | null
@@ -19,7 +20,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No extractable text found in file" }, { status: 400 })
     }
 
-    const documentId = uuid()
+    documentId = uuid()
     const now = Date.now()
 
     getDb()
@@ -42,6 +43,15 @@ export async function POST(request: NextRequest) {
     })
   } catch (error) {
     console.error("Upload error:", error)
+    // Roll back the document row if embedding/indexing failed, so a failed
+    // upload doesn't leave a ghost document (or partial chunks) behind.
+    if (documentId) {
+      try {
+        getDb().prepare("DELETE FROM documents WHERE id = ?").run(documentId)
+      } catch (cleanupError) {
+        console.error("Upload cleanup error:", cleanupError)
+      }
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Upload failed" },
       { status: 500 }

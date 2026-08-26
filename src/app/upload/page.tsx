@@ -31,7 +31,21 @@ export default function UploadPage() {
   }
 
   useEffect(() => {
-    loadDocuments();
+    // Fetch on mount with a cancel flag; setState only in promise callbacks so
+    // React's "set-state-in-effect" lint rule stays satisfied.
+    let ignore = false;
+    fetch("/api/documents")
+      .then((res) => res.json() as Promise<{ documents: Document[] }>)
+      .then((data) => {
+        if (!ignore) setDocuments(data.documents ?? []);
+      })
+      .catch((error) => console.error(error))
+      .finally(() => {
+        if (!ignore) setLoading(false);
+      });
+    return () => {
+      ignore = true;
+    };
   }, []);
 
   async function handleSubmit(e: React.FormEvent) {

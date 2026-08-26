@@ -5,9 +5,15 @@ export async function extractText(file: File): Promise<{ text: string; type: str
   const buffer = Buffer.from(bytes)
 
   if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
-    // @ts-expect-error — pdf-parse ships ESM named export PDFParse while @types/pdf-parse describes CJS default.
-    const data = (await PDFParse(buffer)) as { text: string }
-    return { text: data.text, type: "pdf" }
+    // pdf-parse v2 exports `PDFParse` as a class: construct it with the raw
+    // bytes, then await getText() for the extracted document text.
+    const parser = new PDFParse({ data: buffer })
+    try {
+      const result = await parser.getText()
+      return { text: result.text, type: "pdf" }
+    } finally {
+      await parser.destroy().catch(() => {})
+    }
   }
 
   if (file.type === "text/plain" || file.name.toLowerCase().endsWith(".txt")) {

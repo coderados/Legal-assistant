@@ -34,6 +34,9 @@ export async function POST(request: NextRequest) {
     if (!TEMPLATES[template]) {
       return NextResponse.json({ error: "Unknown template" }, { status: 400 })
     }
+    if (typeof facts !== "string" || facts.trim().length === 0) {
+      return NextResponse.json({ error: "Facts are required" }, { status: 400 })
+    }
 
     const query = `${TEMPLATES[template]}\n\nUser facts:\n${facts}`
     // Retrieval is best-effort: a missing OPENAI_API_KEY or a native sqlite

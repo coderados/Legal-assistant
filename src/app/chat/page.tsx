@@ -132,38 +132,54 @@ export default function ChatPage() {
 
       setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
+      // Parse SSE events with a buffer: a single TCP chunk can split a `data:`
+      // line (or even a JSON payload) mid-event, so lines must be accumulated
+      // across reads before being parsed.
+      let buffer = "";
+      const handleSseData = (data: string) => {
+        if (data === "[DONE]") return;
+        try {
+          const parsed = JSON.parse(data) as {
+            content?: string;
+            sources?: Source[];
+            error?: string;
+          };
+          if (parsed.error) streamError = parsed.error;
+          if (parsed.sources) {
+            sources = parsed.sources;
+            setActiveSources(parsed.sources);
+          }
+          if (parsed.content) {
+            assistantContent += parsed.content;
+            setMessages((prev) => {
+              const next = [...prev];
+              next[next.length - 1] = { role: "assistant", content: assistantContent, sources };
+              return next;
+            });
+          }
+        } catch {
+          // ignore malformed SSE lines
+        }
+      };
+      const processEvents = (text: string) => {
+        for (const line of text.split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          handleSseData(line.slice(6));
+        }
+      };
+
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split("\n").filter((line) => line.startsWith("data: "));
-        for (const line of lines) {
-          const data = line.slice(6);
-          if (data === "[DONE]") continue;
-          try {
-            const parsed = JSON.parse(data) as {
-              content?: string;
-              sources?: Source[];
-              error?: string;
-            };
-            if (parsed.error) streamError = parsed.error;
-            if (parsed.sources) {
-              sources = parsed.sources;
-              setActiveSources(parsed.sources);
-            }
-            if (parsed.content) {
-              assistantContent += parsed.content;
-              setMessages((prev) => {
-                const next = [...prev];
-                next[next.length - 1] = { role: "assistant", content: assistantContent, sources };
-                return next;
-              });
-            }
-          } catch {
-            // ignore malformed SSE lines
-          }
-        }
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        // Keep the last (possibly incomplete) event in the buffer.
+        buffer = events.pop() ?? "";
+        for (const event of events) processEvents(event);
       }
+      // Flush any trailing event that was not terminated by a blank line.
+      buffer += decoder.decode();
+      if (buffer.trim()) processEvents(buffer);
 
       const finalContent = streamError
         ? assistantContent

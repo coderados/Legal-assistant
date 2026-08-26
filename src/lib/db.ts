@@ -23,6 +23,11 @@ export function getDb(): Database.Database {
 
   db = new Database(dbPath)
   db.pragma("journal_mode = WAL")
+  // better-sqlite3 does not enable FK enforcement by default, but the
+  // documents/chunks schema relies on ON DELETE CASCADE to remove a deleted
+  // document's chunks. Without this pragma, orphaned chunks would still be
+  // returned by RAG retrieval after a document is deleted.
+  db.pragma("foreign_keys = ON")
   initDb(db)
   return db
 }

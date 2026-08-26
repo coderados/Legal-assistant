@@ -79,7 +79,10 @@ export function cosineSimilarity(a: number[], b: number[]) {
 }
 
 export async function retrieveRelevantChunks(query: string, topK = 5): Promise<Chunk[]> {
-  const topKValue = Number(process.env.RAG_TOP_K ?? topK)
+  const parsedTopK = Number(process.env.RAG_TOP_K)
+  // A malformed RAG_TOP_K (NaN, 0, negative) would silently break retrieval,
+  // so fall back to the default whenever the value is not a positive integer.
+  const topKValue = Number.isFinite(parsedTopK) && parsedTopK > 0 ? Math.floor(parsedTopK) : topK
   const all = getDb()
     .prepare("SELECT id, document_id, content, embedding, metadata FROM chunks")
     .all() as {
