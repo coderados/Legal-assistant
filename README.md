@@ -58,7 +58,24 @@ A `render.yaml` is included. To deploy:
 2. In Render, create a new **Blueprint** from your repository.
 3. Set the environment variables `AGNES_API_KEY` and `OPENAI_API_KEY` in the Render dashboard.
 
-The SQLite database is stored on a Render disk mounted at `/var/data`.
+The SQLite database is stored on a Render disk mounted at `/var/data`, so uploaded
+documents persist across deploys and restarts.
+
+## Deploying to Vercel
+
+The app also runs on Vercel, but **serverless functions there have a read-only
+filesystem except for `/tmp`** — `/tmp` is not persistent and can be wiped
+between invocations, cold starts, or deploys. `getDb()` (`src/lib/db.ts`)
+detects a serverless environment (`VERCEL` / `AWS_LAMBDA_FUNCTION_NAME`) and
+automatically falls back to a database file under `/tmp` so the app doesn't
+crash, but this means **uploaded documents are not guaranteed to survive**
+between requests on Vercel.
+
+For real persistence on Vercel, point `DATABASE_URL` at an external database
+instead (e.g. Vercel Postgres, Turso, or another hosted SQLite/Postgres
+service) and adapt `src/lib/db.ts` and `src/lib/rag.ts` accordingly — or
+deploy to Render, which ships with a persistent disk out of the box (see
+above).
 
 ## Legal data sources
 

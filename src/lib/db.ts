@@ -1,5 +1,6 @@
 import Database from "better-sqlite3"
 import { mkdirSync } from "fs"
+import os from "os"
 import path from "path"
 
 let db: Database.Database | null = null
@@ -14,10 +15,7 @@ let db: Database.Database | null = null
 export function getDb(): Database.Database {
   if (db) return db
 
-  const dbUrl = process.env.DATABASE_URL ?? "./data/legal.db"
-  const dbPath = path.isAbsolute(dbUrl)
-    ? dbUrl
-    : path.join(process.cwd(), "data", /*turbopackIgnore: true*/ path.basename(dbUrl))
+  const dbPath = resolveDbPath()
 
   mkdirSync(path.dirname(dbPath), { recursive: true })
 
@@ -30,6 +28,28 @@ export function getDb(): Database.Database {
   db.pragma("foreign_keys = ON")
   initDb(db)
   return db
+}
+
+function resolveDbPath(): string {
+  const dbUrl = process.env.DATABASE_URL
+
+  if (dbUrl) {
+    return path.isAbsolute(dbUrl)
+      ? dbUrl
+      : path.join(process.cwd(), "data", /*turbopackIgnore: true*/ path.basename(dbUrl))
+  }
+
+  // No DATABASE_URL configured. `process.cwd()` (e.g. `/var/task` on Vercel)
+  // is a read-only deployment bundle on serverless platforms — only `os.tmpdir()`
+  // (`/tmp`) is writable there, so default to it whenever we detect a
+  // serverless/read-only-root environment. Note this storage is NOT
+  // persistent: it can be wiped between invocations/deploys, so uploaded
+  // documents may disappear. For real persistence, set DATABASE_URL to a
+  // mounted disk (see render.yaml) or point it at an external database.
+  const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME)
+  return isServerless
+    ? path.join(os.tmpdir(), "legal-assistant", "legal.db")
+    : path.join(process.cwd(), "data", "legal.db")
 }
 
 function initDb(database: Database.Database) {
