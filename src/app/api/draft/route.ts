@@ -27,18 +27,50 @@ const TEMPLATES: Record<string, string> = {
     "Draft a cease and desist letter. Identify the wrongful conduct, legal basis for the demand, specific actions to stop, deadline, and consequences of continued conduct.",
 }
 
+const CUSTOM_TEMPLATE_VALUE = "custom"
+const MAX_CUSTOM_TITLE_LENGTH = 200
+const MAX_CUSTOM_INSTRUCTIONS_LENGTH = 4000
+
+function buildCustomTemplateDescription(customTitle: unknown, customInstructions: unknown): string {
+  const title =
+    typeof customTitle === "string" && customTitle.trim()
+      ? customTitle.trim().slice(0, MAX_CUSTOM_TITLE_LENGTH)
+      : "Custom Legal Document"
+  const instructions = (customInstructions as string).trim().slice(0, MAX_CUSTOM_INSTRUCTIONS_LENGTH)
+
+  return `Draft a custom legal document titled "${title}". Follow the user's instructions below for the structure, required sections, and clauses. Use professional legal drafting conventions (caption/heading, defined terms, numbered sections, signature blocks, etc.) as appropriate for this type of document, even though it is not one of the predefined templates.\n\nUser's drafting instructions for this custom document:\n${instructions}`
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const { template, facts } = (await request.json()) as { template: string; facts: string }
-
-    if (!TEMPLATES[template]) {
-      return NextResponse.json({ error: "Unknown template" }, { status: 400 })
+    const { template, facts, customTitle, customInstructions } = (await request.json()) as {
+      template: string
+      facts: string
+      customTitle?: string
+      customInstructions?: string
     }
+
     if (typeof facts !== "string" || facts.trim().length === 0) {
       return NextResponse.json({ error: "Facts are required" }, { status: 400 })
     }
 
-    const query = `${TEMPLATES[template]}\n\nUser facts:\n${facts}`
+    let templateDescription: string
+
+    if (template === CUSTOM_TEMPLATE_VALUE) {
+      if (typeof customInstructions !== "string" || customInstructions.trim().length === 0) {
+        return NextResponse.json(
+          { error: "Drafting instructions are required for a custom document" },
+          { status: 400 },
+        )
+      }
+      templateDescription = buildCustomTemplateDescription(customTitle, customInstructions)
+    } else if (TEMPLATES[template]) {
+      templateDescription = TEMPLATES[template]
+    } else {
+      return NextResponse.json({ error: "Unknown template" }, { status: 400 })
+    }
+
+    const query = `${templateDescription}\n\nUser facts:\n${facts}`
     // Retrieval is best-effort: a missing OPENAI_API_KEY or a native sqlite
     // failure should not prevent the draft from being generated.
     let chunks: Awaited<ReturnType<typeof retrieveRelevantChunks>> = []
@@ -51,7 +83,7 @@ export async function POST(request: NextRequest) {
       .map((c, i) => `[Source ${i + 1}${c.metadata?.source ? ` - ${c.metadata.source}` : ""}]\n${c.content}`)
       .join("\n\n---\n\n")
 
-    const system = `${DRAFT_SYSTEM_PROMPT}\n\n## Requested template\n${TEMPLATES[template]}\n\n## Retrieved legal sources\n${context || "No uploaded legal sources are available yet."}`
+    const system = `${DRAFT_SYSTEM_PROMPT}\n\n## Requested template\n${templateDescription}\n\n## Retrieved legal sources\n${context || "No uploaded legal sources are available yet."}`
 
     const draft = await createAgnesThinkingCompletion(
       [

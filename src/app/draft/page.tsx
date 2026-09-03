@@ -10,8 +10,12 @@ const TEMPLATES = [
   { value: "cease-desist", label: "Cease and desist letter" },
 ];
 
+const CUSTOM_TEMPLATE_VALUE = "custom";
+
 export default function DraftPage() {
-  const [template, setTemplate] = useState("demand-letter");
+  const [template, setTemplate] = useState(TEMPLATES[0].value);
+  const [customTitle, setCustomTitle] = useState("");
+  const [customInstructions, setCustomInstructions] = useState("");
   const [facts, setFacts] = useState("");
   const [draft, setDraft] = useState("");
   const [sources, setSources] = useState<{ index: number; source: string; content: string }[]>([]);
@@ -19,9 +23,16 @@ export default function DraftPage() {
   const [error, setError] = useState<string | null>(null);
   const [speaking, setSpeaking] = useState(false);
 
+  const isCustom = template === CUSTOM_TEMPLATE_VALUE;
+
+  function selectCustomTemplate() {
+    setTemplate(CUSTOM_TEMPLATE_VALUE);
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!facts.trim()) return;
+    if (isCustom && !customInstructions.trim()) return;
 
     setLoading(true);
     setDraft("");
@@ -32,7 +43,13 @@ export default function DraftPage() {
       const res = await fetch("/api/draft", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ template, facts }),
+        body: JSON.stringify({
+          template,
+          facts,
+          ...(isCustom
+            ? { customTitle, customInstructions }
+            : {}),
+        }),
       });
       const data = (await res.json()) as {
         draft?: string;
@@ -85,17 +102,58 @@ export default function DraftPage() {
         className="mt-6 rounded-xl border border-zinc-200 bg-white p-6 shadow-sm"
       >
         <label className="block text-sm font-medium">Template</label>
-        <select
-          value={template}
-          onChange={(e) => setTemplate(e.target.value)}
-          className="mt-2 block w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-500"
-        >
+        <div className="mt-2 flex flex-wrap gap-2">
           {TEMPLATES.map((t) => (
-            <option key={t.value} value={t.value}>
+            <button
+              key={t.value}
+              type="button"
+              onClick={() => setTemplate(t.value)}
+              className={`rounded-full border px-3 py-1.5 text-sm transition ${
+                template === t.value
+                  ? "border-zinc-900 bg-zinc-900 text-white"
+                  : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50"
+              }`}
+            >
               {t.label}
-            </option>
+            </button>
           ))}
-        </select>
+          <button
+            type="button"
+            onClick={selectCustomTemplate}
+            className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+              isCustom
+                ? "border-indigo-600 bg-indigo-600 text-white"
+                : "border-dashed border-indigo-400 bg-white text-indigo-700 hover:bg-indigo-50"
+            }`}
+          >
+            + Custom document
+          </button>
+        </div>
+
+        {isCustom && (
+          <div className="mt-4 rounded-lg border border-indigo-200 bg-indigo-50 p-4">
+            <label className="block text-sm font-medium">Document title / type</label>
+            <input
+              type="text"
+              value={customTitle}
+              onChange={(e) => setCustomTitle(e.target.value)}
+              placeholder="e.g. Non-disclosure agreement, Power of attorney, Lease addendum…"
+              className="mt-2 block w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-500"
+            />
+
+            <label className="mt-4 block text-sm font-medium">Drafting instructions</label>
+            <textarea
+              value={customInstructions}
+              onChange={(e) => setCustomInstructions(e.target.value)}
+              rows={4}
+              placeholder="Describe the structure and content you want: required sections, clauses, tone, governing law, parties, etc."
+              className="mt-2 block w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-500"
+            />
+            <p className="mt-2 text-xs text-indigo-700">
+              Use this to draft any legal document not covered by the templates above.
+            </p>
+          </div>
+        )}
 
         <label className="mt-4 block text-sm font-medium">Facts & context</label>
         <textarea
@@ -108,7 +166,7 @@ export default function DraftPage() {
 
         <button
           type="submit"
-          disabled={loading || !facts.trim()}
+          disabled={loading || !facts.trim() || (isCustom && !customInstructions.trim())}
           className="mt-4 rounded-lg bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white disabled:opacity-50"
         >
           {loading ? "Drafting…" : "Generate draft"}
