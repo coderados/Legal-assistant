@@ -39,7 +39,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </header>
         <main className="flex-1">{children}</main>
         <footer className="border-t border-zinc-200 bg-white px-4 py-3 text-center text-xs text-zinc-500">
-          Not legal advice. Always consult a licensed attorney.
+          Legal Assistant — AI-powered legal research and document drafting.
         </footer>
       </body>
     </html>

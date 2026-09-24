@@ -43,7 +43,7 @@ export default function ChatPage() {
     {
       role: "assistant",
       content:
-        "Hello. I can help you research U.S. federal and California legal topics and answer questions based on your uploaded sources. Remember, I am not a lawyer and this is not legal advice.",
+        "Hello. I can help you research U.S. federal and California legal topics, answer your legal questions, and work with your uploaded sources. What do you need help with?",
     },
   ]);
   const [input, setInput] = useState("");

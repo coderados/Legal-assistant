@@ -12,12 +12,6 @@ export default function Home() {
           and generate document drafts grounded in your sources.
         </p>
 
-        <div className="mt-8 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          <strong>Disclaimer:</strong> This tool is for research and drafting assistance only. It is
-          not a lawyer and does not provide legal advice. Always consult a qualified, licensed
-          attorney before filing or relying on any generated document.
-        </div>
-
         <div className="mt-10 grid gap-4 sm:grid-cols-3">
           <Link
             href="/upload"

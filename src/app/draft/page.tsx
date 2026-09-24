@@ -8,10 +8,19 @@ const TEMPLATES = [
   { value: "complaint", label: "Civil complaint (California)" },
   { value: "contract", label: "Services contract" },
   { value: "cease-desist", label: "Cease and desist letter" },
+  { value: "nda", label: "Non-disclosure agreement (NDA)" },
+  { value: "settlement-agreement", label: "Settlement & release agreement" },
+  { value: "eviction-notice", label: "Eviction notice (CA 3-day)" },
+  { value: "power-of-attorney", label: "Durable power of attorney" },
+  { value: "llc-operating-agreement", label: "LLC operating agreement" },
+  { value: "employment-agreement", label: "Employment agreement" },
+  { value: "last-will", label: "Last will and testament" },
+  { value: "custom", label: "Custom document…" },
 ];
 
 export default function DraftPage() {
   const [template, setTemplate] = useState("demand-letter");
+  const [customInstructions, setCustomInstructions] = useState("");
   const [facts, setFacts] = useState("");
   const [draft, setDraft] = useState("");
   const [sources, setSources] = useState<{ index: number; source: string; content: string }[]>([]);
@@ -22,6 +31,7 @@ export default function DraftPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!facts.trim()) return;
+    if (template === "custom" && !customInstructions.trim()) return;
 
     setLoading(true);
     setDraft("");
@@ -32,7 +42,7 @@ export default function DraftPage() {
       const res = await fetch("/api/draft", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ template, facts }),
+        body: JSON.stringify({ template, facts, customInstructions }),
       });
       const data = (await res.json()) as {
         draft?: string;
@@ -97,6 +107,19 @@ export default function DraftPage() {
           ))}
         </select>
 
+        {template === "custom" && (
+          <>
+            <label className="mt-4 block text-sm font-medium">What should it draft?</label>
+            <input
+              type="text"
+              value={customInstructions}
+              onChange={(e) => setCustomInstructions(e.target.value)}
+              placeholder="e.g. A residential lease agreement for a duplex in Sacramento"
+              className="mt-2 block w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-500"
+            />
+          </>
+        )}
+
         <label className="mt-4 block text-sm font-medium">Facts & context</label>
         <textarea
           value={facts}
@@ -108,7 +131,7 @@ export default function DraftPage() {
 
         <button
           type="submit"
-          disabled={loading || !facts.trim()}
+          disabled={loading || !facts.trim() || (template === "custom" && !customInstructions.trim())}
           className="mt-4 rounded-lg bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white disabled:opacity-50"
         >
           {loading ? "Drafting…" : "Generate draft"}
