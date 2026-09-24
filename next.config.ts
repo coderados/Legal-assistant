@@ -8,6 +8,16 @@ const nextConfig: NextConfig = {
   // Keep native/server-only packages external so they aren't bundled by
   // Turbopack/webpack in a way that breaks their native bindings.
   serverExternalPackages: ["better-sqlite3", "pdf-parse"],
+  // pdf-parse (externalized above) loads pdfjs-dist worker files and the
+  // @napi-rs/canvas native binding at runtime. Automatic file tracing misses
+  // these on serverless platforms, which crashed /api/upload at cold start.
+  outputFileTracingIncludes: {
+    "/api/upload": [
+      "./node_modules/pdf-parse/**/*",
+      "./node_modules/pdfjs-dist/**/*",
+      "./node_modules/@napi-rs/**/*",
+    ],
+  },
 };
 
 export default nextConfig;

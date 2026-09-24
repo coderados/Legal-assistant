@@ -16,8 +16,11 @@ export function chunkText(text: string, maxChars = 1500, overlap = 150): string[
     const end = Math.min(start + maxChars, text.length)
     const boundary = end < text.length ? findBoundary(text, end, overlap) : end
     chunks.push(text.slice(start, boundary).trim())
+    // Stop once the final chunk is emitted; otherwise `boundary - overlap`
+    // moves start forward by a single character and re-emits the tail as
+    // dozens of near-duplicate chunks.
+    if (boundary >= text.length) break
     start = Math.max(start + 1, boundary - overlap)
-    if (start >= text.length) break
   }
   return chunks.filter((c) => c.length > 0)
 }
@@ -44,15 +47,32 @@ export async function embedAndStore(
      VALUES (?, ?, ?, ?, ?, ?)`
   )
 
-  const insert = db.transaction((rows: { id: string; content: string; embedding: number[]; metadata: string }[]) => {
+  const insert = db.transaction((rows: { id: string; content: string; embedding: number[] | null; metadata: string }[]) => {
     for (const row of rows) {
-      stmt.run(row.id, documentId, row.content, JSON.stringify(row.embedding), row.metadata, Date.now())
+      stmt.run(
+        row.id,
+        documentId,
+        row.content,
+        row.embedding ? JSON.stringify(row.embedding) : null,
+        row.metadata,
+        Date.now()
+      )
     }
   })
 
   const rows = await Promise.all(
     chunks.map(async (chunk, index) => {
-      const embedding = await createEmbedding(chunk.content)
+      // Embeddings are best-effort: without OPENAI_API_KEY (or on an OpenAI
+      // outage) the upload must still succeed. Chunks stored without an
+      // embedding are found by keyword fallback at retrieval time.
+      let embedding: number[] | null = null
+      try {
+        embedding = await createEmbedding(chunk.content)
+      } catch (embeddingError) {
+        if (index === 0) {
+          console.warn("[rag] Embedding unavailable, storing chunks without vectors:", embeddingError)
+        }
+      }
       return {
         id: `${documentId}-${index}`,
         content: chunk.content,
@@ -64,6 +84,29 @@ export async function embedAndStore(
 
   insert(rows)
   return rows.length
+}
+
+function keywordScore(query: string, content: string): number {
+  const terms = Array.from(
+    new Set(
+      query
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((t) => t.length >= 3)
+    )
+  )
+  if (terms.length === 0) return 0
+  const haystack = content.toLowerCase()
+  let score = 0
+  for (const term of terms) {
+    let index = haystack.indexOf(term)
+    while (index !== -1) {
+      score += 1
+      index = haystack.indexOf(term, index + term.length)
+    }
+  }
+  // Normalize by content length so longer chunks don't win by default.
+  return score / Math.sqrt(content.length)
 }
 
 export function cosineSimilarity(a: number[], b: number[]) {
@@ -95,16 +138,34 @@ export async function retrieveRelevantChunks(query: string, topK = 5): Promise<C
 
   if (all.length === 0) return []
 
-  const queryEmbedding = await createEmbedding(query)
+  const parsed = all.map((row) => ({
+    id: row.id,
+    documentId: row.document_id,
+    content: row.content,
+    embedding: row.embedding ? (JSON.parse(row.embedding) as number[]) : null,
+    metadata: JSON.parse(row.metadata) as Record<string, unknown>,
+  }))
 
-  const scored = all
+  // Vector search is only possible when both the query and at least one chunk
+  // have embeddings. Otherwise fall back to keyword scoring so documents
+  // uploaded without OPENAI_API_KEY are still retrievable.
+  let queryEmbedding: number[] | null = null
+  try {
+    queryEmbedding = await createEmbedding(query)
+  } catch (embeddingError) {
+    console.warn("[rag] Query embedding unavailable, using keyword fallback:", embeddingError)
+  }
+  const useVectors = queryEmbedding !== null && parsed.some((row) => row.embedding !== null)
+
+  const scored = parsed
     .map((row) => ({
-      id: row.id,
-      documentId: row.document_id,
-      content: row.content,
-      embedding: row.embedding ? (JSON.parse(row.embedding) as number[]) : null,
-      metadata: JSON.parse(row.metadata) as Record<string, unknown>,
-      score: row.embedding ? cosineSimilarity(queryEmbedding, JSON.parse(row.embedding) as number[]) : 0,
+      ...row,
+      score:
+        useVectors && queryEmbedding
+          ? row.embedding
+            ? cosineSimilarity(queryEmbedding, row.embedding)
+            : 0
+          : keywordScore(query, row.content),
     }))
     .sort((a, b) => b.score - a.score)
     .slice(0, topKValue)

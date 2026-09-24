@@ -1,10 +1,21 @@
-import { PDFParse } from "pdf-parse"
-
 export async function extractText(file: File): Promise<{ text: string; type: string }> {
   const bytes = await file.arrayBuffer()
   const buffer = Buffer.from(bytes)
 
   if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+    // pdf-parse pulls in pdfjs-dist and the native @napi-rs/canvas binding,
+    // which can fail to load in serverless bundles. Import it lazily so that
+    // txt/md uploads (and module load itself) never depend on it, and surface
+    // a controlled error instead of crashing the route at cold start.
+    let PDFParse: typeof import("pdf-parse").PDFParse
+    try {
+      ;({ PDFParse } = await import("pdf-parse"))
+    } catch (importError) {
+      console.error("pdf-parse failed to load:", importError)
+      throw new Error(
+        "PDF support is unavailable on this deployment. Please upload a .txt or .md copy instead."
+      )
+    }
     // pdf-parse v2 exports `PDFParse` as a class: construct it with the raw
     // bytes, then await getText() for the extracted document text.
     const parser = new PDFParse({ data: buffer })
